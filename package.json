@@ -1,5 +1,5 @@
 {
-  "name": "combazo-aesencrypt",
+  "name": "aesencrypt",
   "version": "1.0.0",
   "description": "Banking-grade AES-256-GCM encryption for sensitive data with authenticated encryption (AEAD)",
   "main": "dist/AESEncrypt.js",
