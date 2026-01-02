@@ -1,29 +1,45 @@
 {
-  "name": "aesencrypt",
+  "name": "combazo-aesencrypt",
   "version": "1.0.0",
+  "description": "Banking-grade AES-256-GCM encryption for sensitive data with authenticated encryption (AEAD)",
   "main": "dist/AESEncrypt.js",
+  "types": "dist/AESEncrypt.d.ts",
+  "files": [
+    "dist/**/*",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
-    "test": "jest"
+    "test": "jest",
+    "prepublishOnly": "npm run build && npm test"
   },
   "keywords": [
     "AES",
-    "Encryptor",
+    "AES-256-GCM",
+    "encryption",
+    "banking",
+    "security",
+    "crypto",
+    "AEAD",
+    "authenticated-encryption",
     "NodeJS",
-    "Typescript",
-    "Jest",
-    "npm"
+    "TypeScript"
   ],
   "author": "Yadian LLada Lopez",
   "license": "MIT",
-  "description": "This is a simple AES Encryptor for NodeJS",
   "bugs": {
     "url": "https://github.com/tuusuario/AESEncrypt/issues"
   },
   "homepage": "https://github.com/yllada/AESEncrypt#readme",
-  "dependencies": {
-    "crypto-js": "^4.2.0"
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yllada/AESEncrypt.git"
   },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "dependencies": {},
   "devDependencies": {
     "@types/jest": "^29.5.14",
     "@types/node": "^22.13.1",

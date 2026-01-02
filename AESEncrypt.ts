@@ -1,9 +1,11 @@
-import { createHash, createCipheriv, createDecipheriv, pbkdf2Sync, Cipher, Decipher } from 'crypto';
+import { randomBytes, createCipheriv, createDecipheriv, pbkdf2Sync } from 'crypto';
 
-const ITERATION_COUNT = 65536;
-const SALT_LENGTH = 16;
-const KEY_LENGTH = 16;
-const BLOCK_SIZE = 16;
+// Security constants optimized for banking/financial data
+const ITERATION_COUNT = 210000; // OWASP 2023 recommendation for PBKDF2-SHA256
+const SALT_LENGTH = 32; // 256 bits for salt
+const KEY_LENGTH = 32; // AES-256 requires 32 bytes
+const IV_LENGTH = 12; // GCM standard IV length (96 bits)
+const AUTH_TAG_LENGTH = 16; // 128 bits authentication tag
 
 /**
  * Error thrown when the padding in the decrypted data is invalid.
@@ -16,108 +18,142 @@ export class InvalidPaddingError extends Error {
 }
 
 /**
- * Derives the encryption key and initialization vector (IV) from the provided key.
+ * Derives a cryptographically strong encryption key from the provided password using PBKDF2-SHA256.
+ * Uses a random salt to ensure unique key derivation for each encryption operation.
  *
- * The salt is generated as the SHA-1 hash of the key (20 bytes), and the full salt is used
- * with PBKDF2 to derive a 16-byte key. The IV is taken as the first 16 bytes of the salt.
- *
- * @param key - The input key as a Buffer.
- * @returns An object containing the derived key (`keyEnc`) and IV.
- * @throws {Error} If the input key is empty.
+ * @param password - The input password/key as a Buffer.
+ * @param salt - Random salt for key derivation (must be stored with encrypted data).
+ * @returns The derived 256-bit encryption key.
+ * @throws {Error} If the input password is empty or salt is invalid.
  */
-function deriveKeyAndIV(key: Buffer): { keyEnc: Buffer; iv: Buffer } {
-  if (key.length === 0) {
-    throw new Error('Key cannot be empty');
+function deriveKey(password: Buffer, salt: Buffer): Buffer {
+  if (password.length === 0) {
+    throw new Error('Password cannot be empty');
   }
-  const salt: Buffer = createHash('sha1').update(key).digest(); // 20 bytes from SHA-1.
-  const keyEnc: Buffer = pbkdf2Sync(key, salt, ITERATION_COUNT, KEY_LENGTH, 'sha1');
-  const iv: Buffer = salt.subarray(0, SALT_LENGTH);
-  return { keyEnc, iv };
+  if (salt.length !== SALT_LENGTH) {
+    throw new Error(`Salt must be ${SALT_LENGTH} bytes`);
+  }
+  // PBKDF2 with SHA-256 and high iteration count (OWASP 2023 recommendation)
+  return pbkdf2Sync(password, salt, ITERATION_COUNT, KEY_LENGTH, 'sha256');
 }
 
-/**
- * Applies PKCS#5/PKCS#7 padding to the provided data.
- *
- * @param data - The Buffer to be padded.
- * @returns A new Buffer with the required padding added.
- */
-function applyPKCS5Padding(data: Buffer): Buffer {
-  const padding: number = BLOCK_SIZE - (data.length % BLOCK_SIZE);
-  const paddingBuffer: Buffer = Buffer.alloc(padding, padding);
-  return Buffer.concat([data, paddingBuffer]);
-}
+
 
 /**
- * Removes the PKCS#5/PKCS#7 padding from the provided data.
+ * Encrypts a plaintext string using AES-256-GCM with authenticated encryption (AEAD).
+ * 
+ * Security features:
+ * - AES-256-GCM: Provides both confidentiality and authenticity
+ * - Random IV per encryption: Prevents pattern analysis
+ * - Random salt: Ensures unique key derivation
+ * - PBKDF2-SHA256 with 210,000 iterations: Resists brute-force attacks
+ * - Authentication tag: Detects tampering
  *
- * @param data - The Buffer from which to remove the padding.
- * @returns The Buffer with padding removed.
- * @throws {InvalidPaddingError} If the padding size or content is invalid.
- */
-function removePKCS5Padding(data: Buffer): Buffer {
-  if (data.length === 0) return data;
-  const padding: number = data[data.length - 1];
-
-  if (padding < 1 || padding > BLOCK_SIZE) {
-    throw new InvalidPaddingError('Invalid padding size');
-  }
-  
-  // Check that all padding bytes have the same value.
-  for (let i = data.length - padding; i < data.length; i++) {
-    if (data[i] !== padding) {
-      throw new InvalidPaddingError('Invalid padding bytes');
-    }
-  }
-  
-  return data.subarray(0, data.length - padding);
-}
-
-/**
- * Encrypts a plaintext string using AES-128-CBC with manual PKCS#5 padding.
+ * Output format: Base64(salt || iv || authTag || ciphertext)
  *
- * @param plaintext - The text to be encrypted.
- * @param key - The encryption key as a string.
- * @returns The encrypted text encoded in Base64.
- * @throws {Error} If the plaintext or key is empty.
+ * @param plaintext - The sensitive text to encrypt (e.g., bank account number).
+ * @param password - Strong password/key (min 16 chars recommended).
+ * @returns Base64-encoded encrypted data with salt, IV, and auth tag.
+ * @throws {Error} If plaintext or password is empty.
  */
-export function encryptAES(plaintext: string, key: string): string {
+export function encryptAES(plaintext: string, password: string): string {
   if (!plaintext) {
     throw new Error('Plaintext cannot be empty');
   }
-  if (!key) {
-    throw new Error('Key cannot be empty');
+  if (!password) {
+    throw new Error('Password cannot be empty');
   }
-  const keyBuffer: Buffer = Buffer.from(key, 'utf8');
-  const { keyEnc, iv } = deriveKeyAndIV(keyBuffer);
-  const cipher: Cipher = createCipheriv('aes-128-cbc', keyEnc, iv);
-  cipher.setAutoPadding(false); 
-  const plaintextBuffer: Buffer = Buffer.from(plaintext, 'utf8');
-  const paddedPlaintext: Buffer = applyPKCS5Padding(plaintextBuffer);
-  const encryptedBuffer: Buffer = Buffer.concat([cipher.update(paddedPlaintext), cipher.final()]);
-  return encryptedBuffer.toString('base64');
+  if (password.length < 16) {
+    throw new Error('Password must be at least 16 characters for banking-grade security');
+  }
+
+  // Generate cryptographically secure random values
+  const salt = randomBytes(SALT_LENGTH);
+  const iv = randomBytes(IV_LENGTH);
+  
+  // Derive encryption key from password
+  const passwordBuffer = Buffer.from(password, 'utf8');
+  const key = deriveKey(passwordBuffer, salt);
+  
+  // Encrypt with AES-256-GCM (Authenticated Encryption)
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  const plaintextBuffer = Buffer.from(plaintext, 'utf8');
+  
+  const encrypted = Buffer.concat([
+    cipher.update(plaintextBuffer),
+    cipher.final()
+  ]);
+  
+  // Get authentication tag (proves data integrity)
+  const authTag = cipher.getAuthTag();
+  
+  // Combine: salt || iv || authTag || encrypted
+  // This allows decryption without storing salt/IV separately
+  const combined = Buffer.concat([salt, iv, authTag, encrypted]);
+  
+  return combined.toString('base64');
 }
 
 /**
- * Decrypts a Base64-encoded AES-128-CBC encrypted string using manual PKCS#5 padding.
+ * Decrypts a Base64-encoded AES-256-GCM encrypted string with authentication verification.
  *
- * @param encryptedBase64 - The encrypted text in Base64 format.
- * @param key - The decryption key as a string.
+ * Security features:
+ * - Verifies authentication tag before decryption (tamper detection)
+ * - Extracts salt and IV from encrypted data
+ * - Derives the same key using PBKDF2-SHA256
+ * - Throws error if data has been modified
+ *
+ * @param encryptedBase64 - Base64 string containing salt, IV, auth tag, and ciphertext.
+ * @param password - The same password used for encryption.
  * @returns The decrypted plaintext.
- * @throws {Error} If the encrypted text or key is empty.
- * @throws {InvalidPaddingError} If the padding in the decrypted data is invalid.
+ * @throws {Error} If encrypted text/password is empty, data is corrupted, or authentication fails.
  */
-export function decryptAES(encryptedBase64: string, key: string): string {
+export function decryptAES(encryptedBase64: string, password: string): string {
   if (!encryptedBase64) {
     throw new Error('Encrypted text cannot be empty');
   }
-  if (!key) {
-    throw new Error('Key cannot be empty');
+  if (!password) {
+    throw new Error('Password cannot be empty');
   }
-  const keyBuffer: Buffer = Buffer.from(key, 'utf8');
-  const { keyEnc, iv } = deriveKeyAndIV(keyBuffer);
-  const decipher: Decipher = createDecipheriv('aes-128-cbc', keyEnc, iv);
-  decipher.setAutoPadding(false); 
-  const encryptedBuffer: Buffer = Buffer.from(encryptedBase64, 'base64');
-  const decryptedBuffer: Buffer = Buffer.concat([decipher.update(encryptedBuffer), decipher.final()]);
-  return removePKCS5Padding(decryptedBuffer).toString('utf8');
+
+  const combined = Buffer.from(encryptedBase64, 'base64');
+  
+  // Minimum size check: salt + iv + authTag + at least 1 byte of data
+  const minSize = SALT_LENGTH + IV_LENGTH + AUTH_TAG_LENGTH + 1;
+  if (combined.length < minSize) {
+    throw new Error('Invalid encrypted data: too short');
+  }
+  
+  // Extract components from combined buffer
+  let offset = 0;
+  const salt = combined.subarray(offset, offset + SALT_LENGTH);
+  offset += SALT_LENGTH;
+  
+  const iv = combined.subarray(offset, offset + IV_LENGTH);
+  offset += IV_LENGTH;
+  
+  const authTag = combined.subarray(offset, offset + AUTH_TAG_LENGTH);
+  offset += AUTH_TAG_LENGTH;
+  
+  const encrypted = combined.subarray(offset);
+  
+  // Derive the same key using extracted salt
+  const passwordBuffer = Buffer.from(password, 'utf8');
+  const key = deriveKey(passwordBuffer, salt);
+  
+  // Decrypt with authentication verification
+  const decipher = createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(authTag);
+  
+  try {
+    const decrypted = Buffer.concat([
+      decipher.update(encrypted),
+      decipher.final() // This will throw if authentication fails
+    ]);
+    
+    return decrypted.toString('utf8');
+  } catch (error) {
+    // Authentication failure or corrupted data
+    throw new Error('Decryption failed: Invalid password or data has been tampered with');
+  }
 }
